@@ -1,0 +1,55 @@
+- name: Получение задачи из backlog_tasks
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  vars:
+    conn_mysql:
+      mysql_host: "192.168.64.167"
+      mysql_user: "root"
+      mysql_password: "pueoapcm"
+      mysql_database: "crmit"
+
+  tasks:
+    - name: Получить активную задачу
+      antonaurora.crmit.kristofer:
+        connection_params: "{{ conn_mysql }}"
+        action: view
+      register: task_kris
+
+    - name: Показать результат
+      debug:
+        msg: "{{ task_kris.message }}"
+
+    - name: Детальная информация о задаче
+      debug:
+        var: task_kris.task
+      when: task_kris.task_found
+
+    - name: Выполнить действие в зависимости от типа
+      block:
+        - name: Задача на добавление прав
+          debug:
+            msg: "Нужно ДОБАВИТЬ права для пользователя {{ task_kris.task.login }} в папку {{ task_kris.task.folder }}"
+          when: task_kris.task.state == 'add'
+
+        - name: Задача на удаление прав
+          debug:
+            msg: "Нужно УДАЛИТЬ права у пользователя {{ task_kris.task.login }} в папке {{ task_kris.task.folder }}"
+          when: task_kris.task.state == 'remove'
+      when: task_kris.task_found
+
+    - name: добавить коммент в задачу
+      antonaurora.crmit.kristofer:
+        connection_params: "{{ conn_mysql }}"
+        action: comment
+        task_id: "{{ task_kris.task.id }}" 
+        comment: "Задача закрыта без ошибок"
+      register: comment_result
+
+    - name: закрыть задачу
+      antonaurora.crmit.kristofer:
+        connection_params: "{{ conn_mysql }}"
+        action: close
+        task_id: "{{ task_kris.task.id }}"
+      register: close_result

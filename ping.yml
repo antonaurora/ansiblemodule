@@ -1,0 +1,21 @@
+- name: ping
+  hosts: va02
+  gather_facts: no
+  tasks:
+    - name: Ping test
+      win_ping:
+      register: ping_result
+      ignore_errors: yes  
+
+    - name: view result
+      debug:
+          msg: "{{ ping_result }}"
+
+    - name: computer inactive
+      meta: end_play
+      when: ping_result is failed
+
+    - name: Disconnect current session
+      ansible.windows.win_command: tsdiscon
+      ignore_errors: yes
+

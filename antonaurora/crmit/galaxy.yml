@@ -1,0 +1,18 @@
+namespace: "antonaurora"
+name: "crmit"  
+version: "1.0.0"
+readme: "README.md"
+authors:
+  - "Anton <anton@td-aurora.ru>"
+description: "Коллекция crm модулей"
+license:
+  - "GPL-3.0-or-later"
+tags:
+  - crmit
+  - modules
+repository: "https://github.com/antonaurora/ansible/repo"
+documentation: "https://github.com/antonaurora/ansible/repo/docs"
+homepage: "https://github.com/antonaurora/ansible/repo"
+issues: "https://github.com/your/antonaurora/ansible/issues"
+dependencies: {}
+build_ignore: []

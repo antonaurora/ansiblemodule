@@ -1,0 +1,98 @@
+---
+- name: Install Kyocera printer - FINAL VERSION
+  hosts: va91
+  gather_facts: no
+  vars:
+    printer_name: "Kyocera_ECOSYS_P3260dn"
+    printer_ip: "192.168.64.236"
+    driver_name: "Kyocera ECOSYS P3260dn v4 KX (PCL6)"
+    
+  tasks:
+    - name: Test connection
+      win_ping:
+    
+    - name: Install printer using cscript
+      win_shell: |
+        Write-Output "=== Installing Kyocera Printer ==="
+        Write-Output "Printer: {{ printer_name }}"
+        Write-Output "IP: {{ printer_ip }}"
+        Write-Output "Driver: {{ driver_name }}"
+        Write-Output ""
+        
+        # Создаем порт
+        Write-Output "Creating printer port..."
+        cscript C:\Windows\System32\Printing_Admin_Scripts\ru-RU\prnport.vbs -a -r "{{ printer_ip }}" -h "{{ printer_ip }}" -o raw -n 9100
+        
+        # Проверяем создание порта
+        $portCheck = cscript C:\Windows\System32\Printing_Admin_Scripts\ru-RU\prnport.vbs -l 2>&1 | findstr "{{ printer_ip }}"
+        if ($portCheck) {
+          Write-Output "Port created successfully"
+        } else {
+          Write-Output "Port creation failed -可能需要管理员权限"
+        }
+        
+        Write-Output ""
+        
+        # Устанавливаем принтер
+        Write-Output "Installing printer..."
+        cscript C:\Windows\System32\Printing_Admin_Scripts\ru-RU\prnmngr.vbs -a -p "{{ printer_name }}" -m "{{ driver_name }}" -r "{{ printer_ip }}"
+        
+        # Проверяем установку
+        $printerCheck = cscript C:\Windows\System32\Printing_Admin_Scripts\ru-RU\prnmngr.vbs -l 2>&1 | findstr "{{ printer_name }}"
+        if ($printerCheck) {
+          Write-Output "Printer installed successfully"
+          
+          # Делаем принтером по умолчанию
+          cscript C:\Windows\System32\Printing_Admin_Scripts\ru-RU\prnmngr.vbs -t -p "{{ printer_name }}"
+          Write-Output "Printer set as default"
+        } else {
+          Write-Output "Printer installation failed -可能需要管理员权限"
+        }
+        
+        Write-Output ""
+        Write-Output "=== Final Printer List ==="
+        cscript C:\Windows\System32\Printing_Admin_Scripts\ru-RU\prnmngr.vbs -l 2>&1 | findstr Kyocera
+      register: result
+      ignore_errors: yes
+    
+    - name: Show installation result
+      debug:
+        var: result.stdout_lines
+    
+    - name: Check if printer port exists in registry
+      win_shell: |
+        Write-Output "=== Registry Check ==="
+        $regPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Print\Monitors\Standard TCP/IP Port\Ports"
+        Get-ChildItem $regPath -ErrorAction SilentlyContinue | Where-Object {$_.PSChildName -like "*{{ printer_ip }}*"} | Select-Object PSChildName
+      register: reg_check
+      ignore_errors: yes
+    
+    - name: Show registry check
+      debug:
+        var: reg_check.stdout_lines
+    
+    - name: Final summary
+      debug:
+        msg: 
+          - "========================================="
+          - "=== УСТАНОВКА ПРИНТЕРА ЗАВЕРШЕНА ==="
+          - "========================================="
+          - ""
+          - "Хост: {{ inventory_hostname }}"
+          - "Принтер: {{ printer_name }}"
+          - "IP адрес: {{ printer_ip }}"
+          - "Драйвер: {{ driver_name }}"
+          - ""
+          - "Если установка не удалась, выполните на Windows от АДМИНИСТРАТОРА:"
+          - ""
+          - "1. Создать порт:"
+          - '   cscript C:\Windows\System32\Printing_Admin_Scripts\ru-RU\prnport.vbs -a -r "{{ printer_ip }}" -h "{{ printer_ip }}" -o raw -n 9100'
+          - ""
+          - "2. Установить принтер:"
+          - '   cscript C:\Windows\System32\Printing_Admin_Scripts\ru-RU\prnmngr.vbs -a -p "{{ printer_name }}" -m "{{ driver_name }}" -r "{{ printer_ip }}"'
+          - ""
+          - "3. Сделать принтером по умолчанию:"
+          - '   cscript C:\Windows\System32\Printing_Admin_Scripts\ru-RU\prnmngr.vbs -t -p "{{ printer_name }}"'
+          - ""
+          - "4. Проверить установку:"
+          - '   cscript C:\Windows\System32\Printing_Admin_Scripts\ru-RU\prnmngr.vbs -l | findstr Kyocera'

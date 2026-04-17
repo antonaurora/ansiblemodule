@@ -1,0 +1,6 @@
+pymysql
+cryptography
+pywinrm
+pywinrm[credssp]
+requests
+jinja2

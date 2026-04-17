@@ -1,0 +1,202 @@
+- name: task working
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    mysql_host: "192.168.64.167"
+    mysql_user: "root"
+    mysql_password: "pueoapcm"
+    mysql_database: "crmit"
+    domain_admin: "td-aurora\\anton_adm"
+    domain_password: "pueoapcm"
+    domain_host1: "dc1"
+    domain_host2: "dc2"
+  tasks:
+    - name: get_task_kris
+      community.mysql.mysql_query:
+        login_host: "{{ mysql_host }}"
+        login_user: "{{ mysql_user }}"
+        login_password: "{{ mysql_password }}"
+        login_db: "{{ mysql_database }}"
+        query: |
+          SELECT 
+            u.login,
+            u.workplace,
+            CASE 
+              WHEN bt.task_type IN ('user_permission_removal', 'position_permission_removal') THEN 'remove'
+              WHEN bt.task_type IN ('user_permission', 'position_permission') THEN 'add'
+              ELSE bt.status
+            END AS state,
+            p.code AS folder,
+            bt.id
+          FROM backlog_tasks bt
+          LEFT JOIN users u ON bt.user_id = u.id
+          LEFT JOIN permissions p ON bt.permission_id = p.id
+          WHERE bt.user_id IS NOT NULL 
+            AND bt.executor_id = 2
+            AND bt.status = 'in_progress'
+            AND p.module = 'ДИСК'
+          ORDER BY bt.assigned_at
+          LIMIT 1
+      register: task_kris
+
+    - name: Завершить playbook если нет задач
+      meta: end_play
+      when: task_kris is failed or task_kris.query_result | length == 0
+
+    - name: correct task
+      assert:
+        that:
+          - task_kris.query_result[0][0].login | length > 0
+          - task_kris.query_result[0][0].folder is defined
+          - task_kris.query_result[0][0].folder is not none
+          - task_kris.query_result[0][0].folder != ""
+          - task_kris.query_result[0][0].folder.startswith('UF')
+          - task_kris.query_result[0][0].state in ['remove', 'add']
+          - task_kris.query_result[0][0].workplace is defined
+          - task_kris.query_result[0][0].workplace is not none
+          - task_kris.query_result[0][0].workplace != ""
+          - task_kris.query_result[0][0].workplace.startswith('VA')
+        fail_msg: "Не удалось получить данные из CRM системы"
+        success_msg: "Данные получены из CRM системы"
+
+    - name: set task facts
+      set_fact:
+        username: "{{ task_kris.query_result[0][0].login }}"
+        folder: "{{ task_kris.query_result[0][0].folder }}"
+        state: "{{ task_kris.query_result[0][0].state }}"
+        id_task: "{{ task_kris.query_result[0][0].id }}"
+        workplace: "{{ task_kris.query_result[0][0].workplace }}"
+
+    - name: username view
+      debug:
+        msg: "Задача права для {{ username }} для папки {{ folder }} задать значение {{ state }} на компьютере {{ workplace }}"
+
+    - name: ad_user_get dc1
+      microsoft.ad.object_info:
+        filter: "sAMAccountName -eq '{{ username }}'"
+        properties:
+          - sAMAccountName
+        domain_username: "{{ domain_admin }}"
+        domain_password: "{{ domain_password }}"
+      delegate_to: "{{ domain_host1 }}"
+      register: ad_user_check_dc1
+      ignore_errors: true
+
+    - name: username correct AD dc1
+      assert:
+        that:
+          - ad_user_check_dc1 is defined
+          - ad_user_check_dc1.failed is false
+          - ad_user_check_dc1.objects is defined
+          - ad_user_check_dc1.objects | length > 0
+        fail_msg: "Пользователь '{{ username }}' не найден в AD на DC1"
+        success_msg: "Пользователь '{{ username }}' найден в AD на DC1"
+
+    - name: remove_user_from_group
+      microsoft.ad.group:
+        identity: "{{ folder }}"
+        members:
+          remove:
+            - "{{ username }}"
+        domain_username: "{{ domain_admin }}"
+        domain_password: "{{ domain_password }}"
+        state: present
+      delegate_to: "{{ domain_host1 }}"
+      register: group_result
+      when: state == 'remove'
+
+    - name: add_user_to_group
+      microsoft.ad.group:
+        identity: "{{ folder }}"
+        members:
+          add:
+            - "{{ username }}"
+        domain_username: "{{ domain_admin }}"
+        domain_password: "{{ domain_password }}"
+        state: present
+      delegate_to: "{{ domain_host1 }}"
+      register: group_result
+      when: state == 'add'
+
+    - name: Результат операции AD
+      debug:
+        msg: |
+          {% if group_result is defined %}
+            {% if group_result.failed %}
+                Ошибка: {{ group_result.msg | default('Неизвестная ошибка') }}
+            {% elif state == 'add' and group_result.changed %}
+                Пользователь '{{ username }}' добавлен в группу '{{ folder }}'
+            {% elif state == 'add' and not group_result.changed %}
+                Пользователь '{{ username }}' уже в группе '{{ folder }}'
+            {% elif state == 'remove' and group_result.changed %}
+                Пользователь '{{ username }}' удален из группы '{{ folder }}'
+            {% elif state == 'remove' and not group_result.changed %}
+                Пользователь '{{ username }}' не был в группе '{{ folder }}'
+            {% endif %}
+          {% else %}
+             Операция не выполнялась
+          {% endif %}
+
+    - name: Ping test
+      win_ping:
+      register: ping_result
+      ignore_errors: yes  
+      delegate_to: "{{ workplace | lower}}"
+    - name: view result
+      debug:
+        msg: |
+          {% if ping_result.unreachable is defined and ping_result.unreachable %}
+             Компьютер {{ workplace }} недоступен
+          {% elif ping_result.ping is defined and ping_result.ping == 'pong' %}
+             Компьютер {{ workplace }} доступен
+          {% else %}
+             Статус неизвестен
+          {% endif %}
+
+    - name: computer inactive - завершить playbook
+      meta: end_play
+      when: ping_result is failed or (ping_result.unreachable is defined and ping_result.unreachable)
+
+    - name: Disconnect specific user sessions
+      ansible.windows.win_shell: |
+        $username = "{{ username }}"
+        $session = query session | Where-Object { $_ -match $username }
+        if ($session) {
+          $sessionId = ($session -split '\s+')[2]
+          tsdiscon $sessionId
+          Write-Host "User $username disconnected (session $sessionId)"
+          } else {
+          Write-Host "User $username has no active sessions"
+          }
+      delegate_to: "{{ workplace }}"
+      ignore_errors: yes
+      vars:
+        ansible_user: "{{ domain_admin }}"
+        ansible_password: "{{ domain_password }}
+      when: ping_result is success
+
+    - name: task status completed
+      community.mysql.mysql_query:
+        login_host: "{{ mysql_host }}"
+        login_user: "{{ mysql_user }}"
+        login_password: "{{ mysql_password }}"
+        login_db: "{{ mysql_database }}"
+        query: |
+          UPDATE backlog_tasks 
+          SET status = 'completed' 
+          WHERE id = {{ id_task }}
+      when:
+        - id_task != ""
+        - group_result is defined
+        - not group_result.failed
+      register: update_result
+
+    - name: Проверка обновления задачи
+      debug:
+        msg: |
+          {% if update_result is defined and not update_result.failed %}
+             Задача {{ id_task }} обновлена на status='completed'
+          {% else %}
+             Не удалось обновить задачу {{ id_task }}
+          {% endif %}
